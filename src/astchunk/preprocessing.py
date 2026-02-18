@@ -45,15 +45,20 @@ def get_nodes_in_brange(root_node: ts.Node, brange: ByteRange) -> list[ts.Node]:
     all nodes whose byte ranges are fully contained within the specified byte range.
     Nodes with type "ERROR" and their descendants are excluded from the results.
     """
+    # Root node types across supported languages (Python: module, most others: program,
+    # C#: compilation_unit, TypeScript: program)
+    ROOT_NODE_TYPES = {"module", "program", "compilation_unit", "translation_unit"}
+
     results = list[ts.Node]()
     worklist = [root_node]
 
     while worklist:
         n = worklist.pop()
-        if n.type == "ERROR" or n.type == "module":
-            if n.type == "module":
-                for c in n.children:
-                    worklist.append(c)
+        if n.type == "ERROR":
+            continue
+        if n.type in ROOT_NODE_TYPES:
+            for c in n.children:
+                worklist.append(c)
             continue
         n_range = ByteRange(n.start_byte, n.end_byte)
         if brange.contains(n_range):

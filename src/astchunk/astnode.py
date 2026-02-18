@@ -16,10 +16,10 @@ class ASTNode():
         - node_size: size of the node (in non-whitespace characters)
         - ancestors: ancestors of the node (list of tree-sitter nodes)
     """
-    def __init__(self, ts_node: ts.Node, node_size: int, ancestors: list[ts.Node] = []):
+    def __init__(self, ts_node: ts.Node, node_size: int, ancestors: list[ts.Node] | None = None):
         self.node = ts_node
         self.node_size = node_size
-        self.ancestors = ancestors
+        self.ancestors = ancestors if ancestors is not None else []
 
     @property
     def bcode(self):

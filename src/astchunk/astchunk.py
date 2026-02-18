@@ -18,6 +18,22 @@ class ASTChunk():
         - language: programming language
         - metadata_template: type of metadata to store (e.g., start/end line number, path to file, etc.)
     """
+    # Node types that represent class or function definitions across supported languages
+    ANCESTOR_DEFINITION_TYPES = {
+        # Python
+        "class_definition", "function_definition",
+        # Java / C#
+        "class_declaration", "method_declaration", "interface_declaration",
+        "enum_declaration", "constructor_declaration",
+        # TypeScript / JavaScript
+        "function_declaration", "class_declaration", "method_definition",
+        # C
+        "function_definition", "struct_specifier", "enum_specifier",
+        # C++
+        "class_specifier", "namespace_definition", "function_definition",
+        "template_declaration",
+    }
+
     def __init__(self, ast_window: list[ASTNode], max_chunk_size: int, language: str, metadata_template: str):
         self.ast_window = ast_window
         self.max_chunk_size = max_chunk_size
@@ -121,10 +137,7 @@ class ASTChunk():
         chunk_ancestors = []
 
         for node in node_ancestors:
-            if any([
-                node.type == "class_definition",
-                node.type == "function_definition"
-            ]):
+            if node.type in self.ANCESTOR_DEFINITION_TYPES:
                 chunk_ancestors.append(node.text.decode("utf8").split("\n")[0])
 
         return chunk_ancestors
@@ -170,6 +183,16 @@ class ASTChunk():
         else:
             raise ValueError(f"Unsupported Metadata Template Name: {self.metadata_template}!")
 
+    # Language-specific block comment delimiters
+    _COMMENT_DELIMITERS = {
+        "python":     ("'''", "'''"),
+        "java":       ("/*", "*/"),
+        "csharp":     ("/*", "*/"),
+        "typescript": ("/*", "*/"),
+        "c":          ("/*", "*/"),
+        "cpp":        ("/*", "*/"),
+    }
+
     def apply_chunk_expansion(self):
         """
         Apply chunk expansion to the chunk. Chunk expansion is the process of adding chunk expansion metadata 
@@ -186,12 +209,14 @@ class ASTChunk():
         elif self.metadata_template == "coderagbench-swebench-lite":
             self.chunk_expansion_metadata["filepath"] = self.metadata["title"]
 
-        chunk_expansion = "'''\n"
+        comment_open, comment_close = self._COMMENT_DELIMITERS.get(self.language, ("/*", "*/"))
+        chunk_expansion = f"{comment_open}\n"
         chunk_expansion += f"{self.chunk_expansion_metadata['filepath']}\n" if self.chunk_expansion_metadata["filepath"] else ""
         chunk_expansion += f"{self.chunk_expansion_metadata['ancestors']}\n" if self.chunk_expansion_metadata["ancestors"] else ""
-        chunk_expansion += "'''"
+        chunk_expansion += comment_close
 
         self.chunk_text = f"{chunk_expansion}\n{self.chunk_text}"
+        self.chunk_size = get_nws_count_direct(self.chunk_text)
 
     def to_code_window(self) -> dict:
         """

@@ -6,10 +6,13 @@ import tree_sitter_python as tspython
 import tree_sitter_java as tsjava
 import tree_sitter_c_sharp as tscsharp
 import tree_sitter_typescript as tstypescript
+import tree_sitter_c as tsc
+import tree_sitter_cpp as tscpp
 import pyrsistent
 
 from astchunk.astnode import ASTNode
 from astchunk.astchunk import ASTChunk
+from astchunk.node_group import NodeGroup
 from astchunk.preprocessing import (
     ByteRange, 
     preprocess_nws_count, 
@@ -24,10 +27,27 @@ class ASTChunkBuilder():
         - language: Supported languages, currently including python, java, c# and typescript.
         - metadata_template: Type of metadata to store (e.g., start/end line number, path to file, etc).
     """
+    # Node types that count as "definitions" for decorator pre-binding
+    DEFINITION_TYPES = {
+        "function_definition", "class_definition",          # Python
+        "decorated_definition",                              # Python (nested)
+        "method_declaration", "class_declaration",          # Java / C#
+        "function_declaration", "class_declaration",        # TypeScript
+        "export_statement",                                  # TypeScript
+        "struct_specifier", "enum_specifier",               # C
+        "class_specifier", "namespace_definition",          # C++
+        "template_declaration",                              # C++
+    }
+
+    # Node types that are decorators or attachable comments
+    DECORATOR_TYPES = {"decorator", "annotation", "attribute"}
+
     def __init__(self, **configs):
         self.max_chunk_size: int = configs['max_chunk_size']
         self.language: str = configs['language']
         self.metadata_template: str = configs['metadata_template']
+        self.cross_recursive_merge: bool = configs.get('cross_recursive_merge', False)
+        self.decorator_prebind: bool = configs.get('decorator_prebind', False)
 
         if self.language == "python":
             self.parser = ts.Parser(ts.Language(tspython.language()))
@@ -37,6 +57,10 @@ class ASTChunkBuilder():
             self.parser = ts.Parser(ts.Language(tscsharp.language()))
         elif self.language == "typescript":
             self.parser = ts.Parser(ts.Language(tstypescript.language_tsx()))
+        elif self.language == "c":
+            self.parser = ts.Parser(ts.Language(tsc.language()))
+        elif self.language == "cpp":
+            self.parser = ts.Parser(ts.Language(tscpp.language()))
         else:
             raise ValueError(f"Unsupported Programming Language: {self.language}!")
 
@@ -72,7 +96,50 @@ class ASTChunkBuilder():
             ancestors = pyrsistent.v(root_node)
             yield from self.assign_nodes_to_windows(root_node.children, nws_cumsum, ancestors)
     
-    def assign_nodes_to_windows(self, nodes: list[ts.Node], nws_cumsum: np.ndarray, ancestors: pyrsistent.pvector) -> Generator[list[ASTNode], None, None]:
+    def _prebind_decorators(self, nodes: list) -> list:
+        """
+        Pre-process a sibling node list to fuse decorators with their
+        following definition into NodeGroup objects.
+
+        This prevents decorators from ending up in a different chunk than
+        the function/class they decorate.
+
+        Args:
+            nodes: list of ts.Node (or NodeGroup) siblings
+
+        Returns:
+            list where decorator+definition sequences are replaced by NodeGroup
+        """
+        result = []
+        i = 0
+        while i < len(nodes):
+            node = nodes[i]
+            node_type = node.type if hasattr(node, 'type') else ''
+
+            # Check if this is a decorator / annotation
+            if node_type in self.DECORATOR_TYPES:
+                group = [node]
+                i += 1
+                # Collect consecutive decorators
+                while i < len(nodes) and getattr(nodes[i], 'type', '') in self.DECORATOR_TYPES:
+                    group.append(nodes[i])
+                    i += 1
+                # Attach the following definition if present
+                if i < len(nodes) and getattr(nodes[i], 'type', '') in self.DEFINITION_TYPES:
+                    group.append(nodes[i])
+                    i += 1
+                result.append(NodeGroup(group))
+            # Check if this is a comment immediately before a definition
+            elif node_type == 'comment' and i + 1 < len(nodes) and \
+                 getattr(nodes[i + 1], 'type', '') in self.DEFINITION_TYPES:
+                result.append(NodeGroup([node, nodes[i + 1]]))
+                i += 2
+            else:
+                result.append(node)
+                i += 1
+        return result
+
+    def assign_nodes_to_windows(self, nodes: list, nws_cumsum: np.ndarray, ancestors: pyrsistent.pvector, _prebind_active: bool | None = None) -> Generator[list[ASTNode], None, None]:
         """
         Assign AST nodes to windows. A window is a tentative chunk consists of ASTNode before being converted into ASTChunk.
 
@@ -82,9 +149,10 @@ class ASTChunkBuilder():
             3. keeps track of the ancestors of each node for path construction.
 
         Args:
-            nodes: list of AST nodes to be assigned to windows
+            nodes: list of AST nodes (ts.Node or NodeGroup) to be assigned to windows
             nws_cumsum: cumulative sum of non-whitespace characters
             ancestors: ancestors of the current node
+            _prebind_active: override for decorator prebinding in recursive calls (None = use self.decorator_prebind)
 
         Yields:
             Lists (windows) of ASTNode
@@ -93,6 +161,12 @@ class ASTChunkBuilder():
         if not nodes:
             yield from []
             return
+
+        prebind = self.decorator_prebind if _prebind_active is None else _prebind_active
+
+        # (optional) pre-bind decorators to their definitions
+        if prebind:
+            nodes = self._prebind_decorators(nodes)
 
         # Initialize the current window
         current_window = []
@@ -119,11 +193,24 @@ class ASTChunkBuilder():
                 
                 # If node still exceeds limit, recursively process the node's children
                 if node_exceeds_limit:
-                    childs_ancestors = ancestors.append(node)
-                    child_windows = list(self.assign_nodes_to_windows(node.children, nws_cumsum, childs_ancestors))
+                    # For NodeGroup, children are the grouped nodes themselves
+                    child_nodes = node.children
+                    is_node_group = isinstance(node, NodeGroup)
+                    childs_ancestors = ancestors if is_node_group else ancestors.append(node)
+                    # When splitting a NodeGroup, disable prebind for the immediate
+                    # recursive call to prevent infinite re-grouping of the same nodes
+                    child_prebind = False if is_node_group else None
+                    child_windows = list(self.assign_nodes_to_windows(child_nodes, nws_cumsum, childs_ancestors, _prebind_active=child_prebind))
                     if child_windows:
-                        # (optional) Greedily merge adjacent windows from the beginning if merged window does not exceed self.max_chunk_size
-                        yield from self.merge_adjacent_windows(child_windows)
+                        merged = list(self.merge_adjacent_windows(child_windows))
+                        if self.cross_recursive_merge and merged:
+                            # Yield all but the last; carry the last forward as current_window
+                            # so it can potentially merge with the next sibling node
+                            yield from merged[:-1]
+                            current_window = merged[-1]
+                            current_window_size = sum(n.size for n in current_window)
+                        else:
+                            yield from merged
                 else:
                     # Node fits in an empty window
                     current_window.append(ASTNode(node, node_size, ancestors))
@@ -154,22 +241,22 @@ class ASTChunkBuilder():
             Lists (windows) of ASTNode with adjacent windows merged where possible
         """
         assert ast_windows, "Expect non-empty ast_windows"
-        
+
         # Start with a copy of the first list
-        merged_windows = [ast_windows[0][:]]  
-        
+        merged_windows = [ast_windows[0][:]]
+        current_merged_size = sum(n.size for n in merged_windows[0])
+
         for window in ast_windows[1:]:
-            current_extending_window = merged_windows[-1]
-            
-            # Calculate the total character count if we merge
-            merged_window_size = sum(n.size for n in current_extending_window) + sum(n.size for n in window)
-            
+            window_size = sum(n.size for n in window)
+
             # If merging won't exceed the limit, merge the lists
-            if merged_window_size <= self.max_chunk_size:
-                current_extending_window.extend(window)
+            if current_merged_size + window_size <= self.max_chunk_size:
+                merged_windows[-1].extend(window)
+                current_merged_size += window_size
             else:
                 # Otherwise, add the current list as a new entry
                 merged_windows.append(window[:])
+                current_merged_size = window_size
         
         yield from merged_windows
     
@@ -299,6 +386,10 @@ class ASTChunkBuilder():
             code: code to be chunked
             **configs: additional arguments for building chunks and/or chunk metadata
         '''
+        # Early return for empty or whitespace-only code
+        if not code or not code.strip():
+            return []
+
         # step 1: greedily assign AST tree / AST nodes to windows
         #         see self.assign_tree_to_windows() and self.assign_nodes_to_windows() for details
         ast = self.parser.parse(bytes(code, "utf8"))
