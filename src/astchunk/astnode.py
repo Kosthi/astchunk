@@ -3,7 +3,7 @@ import tree_sitter as ts
 from astchunk.preprocessing import ByteRange
 
 
-class ASTNode():
+class ASTNode:
     """
     A wrapper class for tree-sitter node.
 
@@ -16,7 +16,10 @@ class ASTNode():
         - node_size: size of the node (in non-whitespace characters)
         - ancestors: ancestors of the node (list of tree-sitter nodes)
     """
-    def __init__(self, ts_node: ts.Node, node_size: int, ancestors: list[ts.Node] | None = None):
+
+    def __init__(
+        self, ts_node: ts.Node, node_size: int, ancestors: list[ts.Node] | None = None
+    ):
         self.node = ts_node
         self.node_size = node_size
         self.ancestors = ancestors if ancestors is not None else []
@@ -24,31 +27,31 @@ class ASTNode():
     @property
     def bcode(self):
         return self.node.text
-    
+
     @property
     def strcode(self):
         return self.bcode.decode("utf8")
-    
+
     @property
     def brange(self):
         return ByteRange(self.node.start_byte, self.node.end_byte)
-    
+
     @property
     def start_line(self):
         return self.node.start_point.row
-    
+
     @property
     def end_line(self):
         return self.node.end_point.row
-    
+
     @property
     def start_col(self):
         return self.node.start_point.column
-    
+
     @property
     def end_col(self):
         return self.node.end_point.column
-    
+
     @property
     def size(self):
         """

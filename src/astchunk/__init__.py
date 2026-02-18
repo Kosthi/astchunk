@@ -15,7 +15,7 @@ from .preprocessing import (
     get_nws_count,
     get_nws_count_direct,
     get_nodes_in_brange,
-    get_largest_node_in_brange
+    get_largest_node_in_brange,
 )
 
 __version__ = "0.1.0"
@@ -30,5 +30,5 @@ __all__ = [
     "get_nws_count",
     "get_nws_count_direct",
     "get_nodes_in_brange",
-    "get_largest_node_in_brange"
+    "get_largest_node_in_brange",
 ]

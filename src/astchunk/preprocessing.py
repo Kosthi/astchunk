@@ -69,7 +69,10 @@ def get_nodes_in_brange(root_node: ts.Node, brange: ByteRange) -> list[ts.Node]:
 
     return results
 
-def get_largest_node_in_brange(ts_node: ts.Node, brange: ByteRange, size_option: str = "non-ws") -> int:
+
+def get_largest_node_in_brange(
+    ts_node: ts.Node, brange: ByteRange, size_option: str = "non-ws"
+) -> int:
     """
     Return the size of the largest node (in bytes or non-whitespace char) in the given byte range.
     """
@@ -80,11 +83,15 @@ def get_largest_node_in_brange(ts_node: ts.Node, brange: ByteRange, size_option:
         node_sizes = [n.end_byte - n.start_byte for n in nodes]
     elif size_option == "non-ws":
         nws_cumsum = preprocess_nws_count(ts_node.text)
-        node_sizes = [get_nws_count(nws_cumsum, ByteRange(n.start_byte, n.end_byte)) for n in nodes]
+        node_sizes = [
+            get_nws_count(nws_cumsum, ByteRange(n.start_byte, n.end_byte))
+            for n in nodes
+        ]
     else:
         raise ValueError(f"Unrecognized size option: {size_option}")
 
     return max(node_sizes)
+
 
 def preprocess_nws_count(bstring: bytes) -> np.ndarray:
     """
@@ -98,6 +105,7 @@ def preprocess_nws_count(bstring: bytes) -> np.ndarray:
     nws_cumsum = np.concatenate([[0], is_nws_cumsum])
     return nws_cumsum
 
+
 def get_nws_count(nws_cumsum: np.ndarray, brange: ByteRange) -> int:
     """
     Look up the non-whitespace char count within the given byte range.
@@ -106,6 +114,7 @@ def get_nws_count(nws_cumsum: np.ndarray, brange: ByteRange) -> int:
         - need to convert int64 to int for json dump
     """
     return int(nws_cumsum[brange.stop] - nws_cumsum[brange.start])
+
 
 def get_nws_count_direct(code: str) -> int:
     """

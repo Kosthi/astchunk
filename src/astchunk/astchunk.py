@@ -2,7 +2,7 @@ from astchunk.astnode import ASTNode
 from astchunk.preprocessing import ByteRange, get_nws_count_direct
 
 
-class ASTChunk():
+class ASTChunk:
     """
     A chunk of code represented by a list of ASTNodes.
 
@@ -18,23 +18,40 @@ class ASTChunk():
         - language: programming language
         - metadata_template: type of metadata to store (e.g., start/end line number, path to file, etc.)
     """
+
     # Node types that represent class or function definitions across supported languages
     ANCESTOR_DEFINITION_TYPES = {
         # Python
-        "class_definition", "function_definition",
+        "class_definition",
+        "function_definition",
         # Java / C#
-        "class_declaration", "method_declaration", "interface_declaration",
-        "enum_declaration", "constructor_declaration",
+        "class_declaration",
+        "method_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "constructor_declaration",
         # TypeScript / JavaScript
-        "function_declaration", "class_declaration", "method_definition",
+        "function_declaration",
+        "class_declaration",
+        "method_definition",
         # C
-        "function_definition", "struct_specifier", "enum_specifier",
+        "function_definition",
+        "struct_specifier",
+        "enum_specifier",
         # C++
-        "class_specifier", "namespace_definition", "function_definition",
+        "class_specifier",
+        "namespace_definition",
+        "function_definition",
         "template_declaration",
     }
 
-    def __init__(self, ast_window: list[ASTNode], max_chunk_size: int, language: str, metadata_template: str):
+    def __init__(
+        self,
+        ast_window: list[ASTNode],
+        max_chunk_size: int,
+        language: str,
+        metadata_template: str,
+    ):
         self.ast_window = ast_window
         self.max_chunk_size = max_chunk_size
         self.language = language
@@ -45,7 +62,7 @@ class ASTChunk():
         self.chunk_size = get_nws_count_direct(self.chunk_text)
 
         # build chunk ancestors using the ancestors of the first ASTNode in the window
-        self.chunk_ancestors = self.build_chunk_ancestors(self.ast_window[0].ancestors) 
+        self.chunk_ancestors = self.build_chunk_ancestors(self.ast_window[0].ancestors)
 
     @property
     def strcode(self):
@@ -53,7 +70,9 @@ class ASTChunk():
 
     @property
     def brange(self):
-        return ByteRange(self.ast_window[0].brange.start, self.ast_window[-1].brange.stop)
+        return ByteRange(
+            self.ast_window[0].brange.start, self.ast_window[-1].brange.stop
+        )
 
     @property
     def start_line(self):
@@ -81,8 +100,8 @@ class ASTChunk():
         """
         Rebuild source code from a list of ASTNodes.
 
-        The code text stored in each ASTNode is inherited from the tree-sitter Node object, which omits 
-        leading and trailing spaces and newlines between nodes. Therefore, this function restores the 
+        The code text stored in each ASTNode is inherited from the tree-sitter Node object, which omits
+        leading and trailing spaces and newlines between nodes. Therefore, this function restores the
         original code by adding the necessary newlines and spaces.
 
         Args:
@@ -99,33 +118,33 @@ class ASTChunk():
 
         for node in ast_window:
             # If we need to jump to a new line, add newline(s)
-            if  node.start_line > current_line:
+            if node.start_line > current_line:
                 # Add as many newlines as needed.
                 code += "\n" * (node.start_line - current_line)
-                current_line =  node.start_line
+                current_line = node.start_line
                 # Reset the column since we are at a new line.
                 current_col = 0
             # If we are on the correct line but need to add indentation spaces:
-            if  node.start_col > current_col:
+            if node.start_col > current_col:
                 code += " " * (node.start_col - current_col)
-                current_col =  node.start_col
+                current_col = node.start_col
             # Append the node_text
             code += node.strcode
             # Update our cursor position to the given end coordinate.
             # (We trust that the given end coordinate is consistent with the node_text.)
-            current_line, current_col =  node.end_line,  node.end_col
+            current_line, current_col = node.end_line, node.end_col
 
         return code
 
     def build_chunk_ancestors(self, node_ancestors: list[ASTNode]) -> list[ASTNode]:
-        '''
-        Build the class/function path to the chunk. The path is built from the ancestors of the first 
+        """
+        Build the class/function path to the chunk. The path is built from the ancestors of the first
         ASTNode in the window. We only keep the ancestors that are class or function definitions.
 
         The intuition is that we want to record where the chunk is located in the AST. This can be useful
         for downstream tasks such as code retrieval (e.g., disambiguating between different functions with the same name).
         For each ancestor that is a class or function definition, we extract the first line in the ancestor's text.
-        This simple heuristic is also commonly used in software patching tasks, such as generating GitHub issue fixes, 
+        This simple heuristic is also commonly used in software patching tasks, such as generating GitHub issue fixes,
         where identifying the location of a change is an essential part of the patch.
 
         Args:
@@ -133,7 +152,7 @@ class ASTChunk():
 
         Returns:
             List of ancestors that are class or function definitions
-        '''
+        """
         chunk_ancestors = []
 
         for node in node_ancestors:
@@ -181,38 +200,54 @@ class ASTChunk():
                 "title": filename,
             }
         else:
-            raise ValueError(f"Unsupported Metadata Template Name: {self.metadata_template}!")
+            raise ValueError(
+                f"Unsupported Metadata Template Name: {self.metadata_template}!"
+            )
 
     # Language-specific block comment delimiters
     _COMMENT_DELIMITERS = {
-        "python":     ("'''", "'''"),
-        "java":       ("/*", "*/"),
-        "csharp":     ("/*", "*/"),
+        "python": ("'''", "'''"),
+        "java": ("/*", "*/"),
+        "csharp": ("/*", "*/"),
         "typescript": ("/*", "*/"),
-        "c":          ("/*", "*/"),
-        "cpp":        ("/*", "*/"),
+        "c": ("/*", "*/"),
+        "cpp": ("/*", "*/"),
     }
 
     def apply_chunk_expansion(self):
         """
-        Apply chunk expansion to the chunk. Chunk expansion is the process of adding chunk expansion metadata 
+        Apply chunk expansion to the chunk. Chunk expansion is the process of adding chunk expansion metadata
         (e.g., file path, class path) to the beginning of each chunk.
         """
         self.chunk_expansion_metadata = {
             "filepath": "",
-            "ancestors": "\n".join(["\t" * i + ancestor for i, ancestor in enumerate(self.chunk_ancestors)]),
+            "ancestors": "\n".join(
+                ["\t" * i + ancestor for i, ancestor in enumerate(self.chunk_ancestors)]
+            ),
         }
         if self.metadata_template == "default":
             self.chunk_expansion_metadata["filepath"] = self.metadata["filepath"]
         elif self.metadata_template == "coderagbench-repoeval":
-            self.chunk_expansion_metadata["filepath"] = "/".join(self.metadata["fpath_tuple"]) 
+            self.chunk_expansion_metadata["filepath"] = "/".join(
+                self.metadata["fpath_tuple"]
+            )
         elif self.metadata_template == "coderagbench-swebench-lite":
             self.chunk_expansion_metadata["filepath"] = self.metadata["title"]
 
-        comment_open, comment_close = self._COMMENT_DELIMITERS.get(self.language, ("/*", "*/"))
+        comment_open, comment_close = self._COMMENT_DELIMITERS.get(
+            self.language, ("/*", "*/")
+        )
         chunk_expansion = f"{comment_open}\n"
-        chunk_expansion += f"{self.chunk_expansion_metadata['filepath']}\n" if self.chunk_expansion_metadata["filepath"] else ""
-        chunk_expansion += f"{self.chunk_expansion_metadata['ancestors']}\n" if self.chunk_expansion_metadata["ancestors"] else ""
+        chunk_expansion += (
+            f"{self.chunk_expansion_metadata['filepath']}\n"
+            if self.chunk_expansion_metadata["filepath"]
+            else ""
+        )
+        chunk_expansion += (
+            f"{self.chunk_expansion_metadata['ancestors']}\n"
+            if self.chunk_expansion_metadata["ancestors"]
+            else ""
+        )
         chunk_expansion += comment_close
 
         self.chunk_text = f"{chunk_expansion}\n{self.chunk_text}"
@@ -225,13 +260,10 @@ class ASTChunk():
         if self.metadata_template == "coderagbench-swebench-lite":
             code_window = {
                 "_id": self.metadata["_id"],
-                "title": self.metadata['title'],
-                "text": self.chunk_text
+                "title": self.metadata["title"],
+                "text": self.chunk_text,
             }
         else:
-            code_window = {
-                "content": self.chunk_text,
-                "metadata": self.metadata
-            }
+            code_window = {"content": self.chunk_text, "metadata": self.metadata}
 
         return code_window
